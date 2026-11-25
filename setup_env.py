@@ -171,29 +171,32 @@ def find_adb() -> str:
     return download_platform_tools()
 
 
-def connect_emulator(adb):
+def connect_emulator(adb, *, quiet=False):
     """Select an existing Android device; do not connect all emulator ports."""
-    step("Connecting to the emulator")
+    if not quiet:
+        step("Connecting to the emulator")
     devices = online_serials(adb)
     if not devices:
         for port in ("16384", "7555", "16416", "21503", "62001"):
-            subprocess.run([adb, "connect", f"127.0.0.1:{port}"],
-                           capture_output=True, text=True, errors="replace", timeout=10)
+            try:
+                subprocess.run([adb, "connect", f"127.0.0.1:{port}"],
+                               capture_output=True, text=True, errors="replace", timeout=10)
+            except subprocess.TimeoutExpired:
+                continue
             devices = online_serials(adb)
             if devices:
                 break
     if not devices:
-        warn("No online Android device. Start MuMu and enable ADB debugging.")
+        if not quiet:
+            warn("No online Android device. Start MuMu and enable ADB debugging.")
         return None
     selected = auto_select_device(adb, serials=devices)
     if not selected:
-        warn("Multiple distinct devices are available. Specify -Serial in run-all.ps1.")
-        print("   Devices: " + ", ".join(devices))
+        if not quiet:
+            warn("Multiple distinct devices are available. Specify -Serial in run-all.ps1.")
         return None
-    if len(devices) > 1:
-        ok(f"Auto-selected device {selected} among {', '.join(devices)}")
-    else:
-        ok(f"Connected device: {selected}")
+    if not quiet:
+        ok("Android device connected.")
     return selected
 
 

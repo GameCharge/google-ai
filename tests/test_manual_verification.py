@@ -1,6 +1,6 @@
 """Offline tests for explicit, fail-closed manual Android verification."""
 import io
-from subprocess import CompletedProcess
+from subprocess import CompletedProcess, TimeoutExpired
 import threading
 import unittest
 from unittest.mock import patch
@@ -43,6 +43,40 @@ class ManualVerificationTests(unittest.TestCase):
                 r"uiautomator dump \1 >/dev/null && cat \1$",
             )
         self.assertNotEqual(first, second)
+
+    def test_ui_capture_recovers_once_with_fresh_path(self):
+        fresh = '<hierarchy><node text="fresh"/></hierarchy>'
+        with patch.object(ultra0, "sh", side_effect=[RuntimeError("Segmentation fault"), fresh]) as sh, \
+             patch.object(ultra0.time, "sleep") as sleep:
+            self.assertEqual(ultra0.ui_xml(), fresh)
+        self.assertEqual(sh.call_count, 2)
+        self.assertNotEqual(sh.call_args_list[0].args, sh.call_args_list[1].args)
+        self.assertTrue(all(call.kwargs["check"] and call.kwargs["timeout"] == 20
+                            for call in sh.call_args_list))
+        sleep.assert_called_once_with(1)
+
+    def test_repeated_crash_timeout_or_invalid_recovery_stops(self):
+        for second in (RuntimeError("SIGSEGV"), TimeoutExpired("adb", 20), "<hierarchy>"):
+            with self.subTest(second=second), \
+                 patch.object(ultra0, "sh", side_effect=[RuntimeError("Segmentation fault"), second]) as sh, \
+                 patch.object(ultra0.time, "sleep"):
+                with self.assertRaisesRegex(ultra0.UICaptureError, "^Android UI capture failed$"):
+                    ultra0.ui_xml()
+                self.assertEqual(sh.call_count, 2)
+
+    def test_ui_capture_timeout_retries_once_then_stops(self):
+        with patch.object(ultra0, "sh", side_effect=TimeoutExpired("adb", 20)) as sh, \
+             patch.object(ultra0.time, "sleep"):
+            with self.assertRaises(ultra0.UICaptureError):
+                ultra0.ui_xml()
+            self.assertEqual(sh.call_count, 2)
+
+    def test_crash_during_account_inspection_never_guesses_identity(self):
+        with patch.object(ultra0, "ui_xml", side_effect=ultra0.UICaptureError("Android UI capture failed")), \
+             patch.object(ultra0, "sh") as sh:
+            with self.assertRaises(ultra0.UICaptureError):
+                ultra0.current_play_account()
+            sh.assert_not_called()
 
     def test_ui_dump_failure_without_stderr_is_reported(self):
         with patch.object(ultra0, "sh", side_effect=RuntimeError("")), \

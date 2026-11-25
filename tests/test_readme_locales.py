@@ -83,6 +83,21 @@ class ReadmeLocalesTests(unittest.TestCase):
                 for item in ("Source code (zip)", "`.exe`", "ADB/Frida"):
                     self.assertIn(item, guide)
 
+    def test_windows_startup_guidance(self):
+        usage = content("docs/USAGE.md")
+        troubleshooting = content("docs/TROUBLESHOOTING.md")
+        for label in ("Start MuMu", "-MumuInstance", "MUMU_DIR", "Retry never starts a VM"):
+            self.assertIn(label, troubleshooting)
+        self.assertIn("CLI Step 5 requires separate numbered confirmation.", usage)
+        for label in ("-StartMumu", "-NoStartMumu", "-MumuInstance", "No VM is created"):
+            self.assertIn(label, usage)
+
+    def test_ui_capture_failure_guidance_is_actionable(self):
+        guide = content("docs/TROUBLESHOOTING.md")
+        self.assertIn("Android UI capture failed / Segmentation fault", guide)
+        self.assertIn("restart the selected Android device", guide)
+        self.assertIn("Check Device & Offers", guide)
+
     def test_support_and_muse_distinction_remains_in_detailed_guides(self):
         for overview in OVERVIEWS:
             with self.subTest(file=overview):

@@ -20,6 +20,17 @@ class CoreTests(unittest.TestCase):
         self.assertIn("Google One", result.instruction)
         self.assertFalse(result.can_review)
 
+    def test_ui_capture_failure_has_restart_guidance_and_never_authorizes_checkout(self):
+        for step in (1, 3):
+            for result in (runtime_error_outcome("Android UI capture failed", step),
+                           cli_issue_outcome(["EPLUS_ISSUE:ui_capture_failed"], step)):
+                self.assertEqual(result.code, "ui_capture_failed")
+                self.assertIn("restart", result.instruction)
+                self.assertIn("Step 1", result.instruction)
+                self.assertFalse(result.can_review)
+                if step >= 2:
+                    self.assertIn("payment history", result.instruction)
+
     def test_paid_cli_errors_never_authorize_next_and_warn_about_payments(self):
         result = cli_issue_outcome(["EPLUS_ISSUE:offer_query_failed"], 2)
         self.assertFalse(result.can_review)
@@ -298,6 +309,29 @@ class CoreTests(unittest.TestCase):
     def test_exit_error_never_allows_next(self):
         result = outcome_for_stage(3, 1, {"status": "checkout_requested"})
         self.assertFalse(result.can_review)
+
+    def test_numbered_masked_account_picker_hints(self):
+        from tui_core import account_picker_label
+        first = account_picker_label("alice@example.com", 1)
+        second = account_picker_label("alicia@example.com", 2)
+        self.assertNotEqual(first, second)
+        self.assertNotIn("alice@example.com", first)
+        self.assertNotIn("alicia@example.com", second)
+
+    def test_colliding_picker_hints_and_short_local_parts(self):
+        from tui_core import account_picker_options
+        options = account_picker_options(["albert@example.com", "allent@example.com"])
+        self.assertEqual(len(options), 2)
+        self.assertNotEqual(options[0][0].split(". ", 1)[1], options[1][0].split(". ", 1)[1])
+        self.assertEqual(account_picker_options(["a@example.com", "ab@example.com"]), [])
+        self.assertEqual(mask_email("ab@example.com"), "***@example.com")
+        self.assertEqual(account_picker_options(["albert@example.com", "alxert@example.com"]), [])
+
+    def test_redacted_diagnostic_preserves_nonidentity_details(self):
+        from tui_core import redact_diagnostic
+        self.assertEqual(redact_diagnostic("Account alice@example.com"), "Account [account hidden]")
+        self.assertEqual(redact_diagnostic("Device emulator-5554"), "Device [device hidden]")
+        self.assertEqual(redact_diagnostic("ADB emulator-5554 ready", "emulator-5554"), "ADB [device hidden] ready")
 
     def test_account_mask(self):
         self.assertEqual(mask_email("example@gmail.com"), "ex***@gmail.com")
@@ -1148,6 +1182,32 @@ class TextualSmokeTests(unittest.IsolatedAsyncioTestCase):
                         self.assertTrue(app.query_one("#quickstart").display)
                     launch.assert_not_called()
 
+    async def test_start_mumu_popup_restores_controls_on_failure(self):
+        from tui import ConnectionNotice, GoogleAITUI
+        from textual.widgets import Button, Static
+        from mumu_remote import MuMuError
+        with tempfile.TemporaryDirectory() as directory:
+            app = GoogleAITUI(repo=Path(directory))
+            async with app.run_test(size=(110, 35)) as pilot:
+                notice = ConnectionNotice("Disconnected", "Retry the connection.")
+                with patch("tui.sys.platform", "win32"):
+                    app.push_screen(notice)
+                    await pilot.pause()
+                with patch("device_diagnostics.locate_adb", return_value="adb"), \
+                     patch("mumu_remote.connect_existing_instance", side_effect=MuMuError("Choose an existing instance.")):
+                    notice.start_mumu()
+                    for control in ("#connection_start_mumu", "#connection_retry", "#notice_close"):
+                        self.assertTrue(notice.query_one(control, Button).disabled)
+                    for _ in range(50):
+                        await pilot.pause(0.02)
+                        if notice._retry_started is None:
+                            break
+                self.assertIsNone(notice._retry_started)
+                for control in ("#connection_start_mumu", "#connection_retry", "#notice_close"):
+                    self.assertFalse(notice.query_one(control, Button).disabled)
+                self.assertIn("Choose an existing instance.", str(notice.query_one("#connection_instruction", Static).render()))
+                self.assertFalse(app._offer_check_ready)
+
     async def test_connection_popup_retry_shows_timer_and_recovers(self):
         from tui import ConnectionNotice, GoogleAITUI
         from device_diagnostics import ConnectionStatus
@@ -1421,14 +1481,14 @@ class TextualSmokeTests(unittest.IsolatedAsyncioTestCase):
                     app._received("  Android     12 (SDK 31), ABI x86_64")
                     await pilot.pause()
                     self.assertIn("Android 12 · SDK 31 · x86_64", card.render().plain)
-                    self.assertEqual(card.tooltip, "Android 12 · SDK 31 · x86_64\nADB: emulator-5554")
+                    self.assertEqual(card.tooltip, "Android 12 · SDK 31 · x86_64")
                     self.assertGreaterEqual(card.content_region.width, len("Android 12 · SDK 31 · x86_64"))
                     with patch.object(app, "run_stage"):
                         app._start(1, False)
                     self.assertIsNone(card.tooltip)
                     self.assertNotIn("Android 12", card.render().plain)
                     app._received("Device emulator-5556")
-                    self.assertEqual(card.tooltip, "emulator-5556")
+                    self.assertEqual(card.tooltip, "Android connected (ADB)")
 
     async def test_checkout_confirmations_explain_each_one_dollar_event(self):
         from textual.widgets import Static

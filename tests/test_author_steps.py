@@ -17,10 +17,10 @@ class OriginalProStageTests(unittest.TestCase):
             self.assertIn('Number = %d;' % step, ps)
             self.assertIn('Plan = "%s"; Offer = "%s"' % (plan, offer), ps)
 
-    def test_single_step_does_not_require_typed_checkout_approval(self):
+    def test_single_step_five_requires_explicit_cli_approval(self):
         ps = (ROOT / "run-all.ps1").read_text(encoding="utf-8")
         self.assertNotIn('("RUN {0}" -f $stage.Number)', ps)
-        self.assertIn('if ($AllStages -and $stage.Number -eq 5)', ps)
+        self.assertIn('if ($stage.Number -eq 5 -and ($AllStages -or $env:EPLUS_TUI -ne "1"))', ps)
         self.assertIn('if ($AllStages) {\n            if (-not (Confirm-Exact "Only if you verified', ps)
         self.assertIn('Read-Host "     Choose 1/2/0"', ps)
         self.assertIn('Write-Host "     [1] Continue"', ps)
@@ -71,6 +71,22 @@ class OriginalProStageTests(unittest.TestCase):
         self.assertIn('if ($report.status -eq "checkout_requested")', ps)
         self.assertIn('break', ps)
 
+    def test_mumu_recovery_filter_accepts_configuration_hint(self):
+        import re
+        ps = (ROOT / "run-all.ps1").read_text(encoding="utf-8")
+        pattern = re.search(r"-match '([^']*MUMU_RECOVERY:[^']*)'", ps).group(1)
+        self.assertIsNotNone(re.fullmatch(pattern, "MUMU_RECOVERY:MuMu Manager not found. Install MuMu or configure MUMU_DIR."))
+        self.assertIsNone(re.fullmatch(pattern, "MUMU_RECOVERY:private@example.com"))
+        self.assertIsNone(re.fullmatch(pattern, "MUMU_RECOVERY:127.0.0.1:16384"))
+        self.assertIsNone(re.fullmatch(pattern, "Untrusted MUMU_DIR message"))
+
+    def test_reconnect_keeps_exact_selected_transport(self):
+        ps = (ROOT / "run-all.ps1").read_text(encoding="utf-8")
+        self.assertIn('$Serial -and $online -cnotcontains $Serial -and $Serial -match', ps)
+        self.assertIn('$null = & $Adb connect $Serial 2>$null', ps)
+        self.assertIn('if ($online -cnotcontains $Serial)', ps)
+        self.assertIn('if ($online.Count -eq 0 -and -not $Serial)', ps)
+
     def test_no_checkout_by_default(self):
         ps = (ROOT / "run-all.ps1").read_text(encoding="utf-8")
         self.assertIn("[int]$Step = 1", ps)
@@ -95,7 +111,7 @@ class OriginalProStageTests(unittest.TestCase):
         import re
         self.assertIsNone(re.search(r"\$pid\s*=", ps, flags=re.IGNORECASE))
 
-    def test_all_stages_includes_optional_step_five_and_force_is_explicit(self):
+    def test_all_stages_includes_optional_step_five_and_rejects_force(self):
         ps = (ROOT / "run-all.ps1").read_text(encoding="utf-8")
         self.assertIn('$_.Number -ge $StartStep -and $_.Number -le 5', ps)
         self.assertIn('[switch]$Force', ps)
@@ -104,17 +120,21 @@ class OriginalProStageTests(unittest.TestCase):
         self.assertIn('Confirm-Exact "Confirm Google Play shows NO ACTIVE Google One subscription', ps)
         self.assertIn('if ($AllStages)', ps)
         self.assertIn('Confirm-Exact "Confirm Google Play shows an ACTIVE Google AI Pro subscription', ps)
-        self.assertIn('if ($Force) { $args += "--force" }', ps)
-        self.assertIn('Confirm-Exact "Use original --force for this Android account?" "FORCE"', ps)
+        self.assertNotIn('$args += "--force"', ps)
+        self.assertNotIn('$Email = "current@device"', ps)
+        self.assertIn('Stop-Workflow "-Force is not supported for paid stages.', ps)
+        self.assertLess(ps.index('if (-not $playAccount) {', ps.index('# Reuse the selected Play account')), ps.index('if ($Force) {'))
+        self.assertLess(ps.index('if ($playAccount -cne $Email)'), ps.index('if ($Force) {'))
+        self.assertLess(ps.index('if ($Force) {'), ps.index('Run-Command $Python $args'))
         self.assertIn('if (-not $Email -and $playAccount)', ps)
         self.assertIn('if ($report.status -eq "checkout_requested")', ps)
         self.assertNotIn('"launched", "subscribed"', ps)
         self.assertIn('Confirm-Exact "Only if you verified the active plan', ps)
         self.assertIn('original stages starting at Step {0}, including optional Step 5?', ps)
-        self.assertIn('if ($AllStages -and $stage.Number -eq 5)', ps)
+        self.assertIn('if ($stage.Number -eq 5 -and ($AllStages -or $env:EPLUS_TUI -ne "1"))', ps)
         self.assertIn('if (-not $AllStages) {', ps)
         self.assertIn('if ($AllStages) {', ps)
-        self.assertIn('Single-step mode: no console confirmations', ps)
+        self.assertIn('Single-step mode: the selected step may open Google Play checkout', ps)
         self.assertIn('Single step finished. Review the actual subscription', ps)
         self.assertIn('Cannot identify the active Google Play account.', ps)
         self.assertIn('Cannot select a single Android device automatically.', ps)

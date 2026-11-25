@@ -182,6 +182,10 @@ MESSAGES = {
         "Android instrumentation is not ready",
         "On macOS, relaunch using run-macos.sh to prepare Frida. Check the Android connection before retrying.",
     ),
+    "billing_module_setup_failed": (
+        "Billing module setup failed",
+        "Check authorized Android access and file permissions, then rerun the environment check.",
+    ),
     "environment_failed": (
         "Android environment check did not finish",
         "Check ADB, Google One and Frida before retrying. If checkout was previously attempted, verify Google Play first.",
@@ -219,6 +223,7 @@ CLI_ISSUES = {
     "offer_query_failed": MESSAGES["offer_query_failed"],
     "offers_unavailable": MESSAGES["offer_query_failed"],
     "report_missing": ("The tool did not return a result", "Open Debug for details."),
+    "ui_capture_failed": ("Android UI capture failed", "Android could not read its screen after a retry. Close MuMu and reopen it, or restart the selected Android device. Wait for boot, unlock the screen, open Google Play, then run Check Device & Offers again from Step 1."),
     "account_unverified": ("Google Play account was not verified", "Open the Play Store profile and confirm the intended account before continuing."),
     "wrong_account": ("Google Play is using the wrong account", "Switch to the intended Google Play account and run Step 1 again."),
 }
@@ -270,6 +275,8 @@ def runtime_error_outcome(message: str, step: int) -> Outcome:
     validate_step(step)
     detail = message.lower()
     cases = (
+        ("android ui capture failed", "ui_capture_failed"),
+        ("billing module setup failed", "billing_module_setup_failed"),
         ("adb is missing", "adb_missing"),
         ("no online android device", "device_missing"),
         ("android device changed since step 1", "device_mismatch"),
@@ -446,7 +453,48 @@ def mask_email(value: str) -> str:
     if not m:
         return "Not detected"
     name, domain = m.groups()
-    return f"{name[:2]}***@{domain}"
+    return f"{name[:2] if len(name) > 2 else ''}***@{domain}"
+
+
+def account_picker_label(value: str, index: int) -> str:
+    """Keep a numbered masked hint with a trailing character for longer aliases."""
+    name, _, domain = value.partition("@")
+    if len(name) >= 4 and domain:
+        return f"{index}. {name[:2]}***{name[-1]}@{domain}"
+    return f"{index}. ***@{domain}" if domain else f"{index}. Not detected"
+
+
+def account_picker_options(accounts: list[str]) -> list[tuple[str, str]]:
+    """Disambiguate with a masked positional hint; omit indistinguishable aliases.
+
+    Never reveal every local-part character or an entire short local part.
+    The caller can ask the user to choose in Play Store instead.
+    """
+    hints = [account_picker_label(value, i + 1).split(". ", 1)[1]
+             for i, value in enumerate(accounts)]
+    original_hints = tuple(hints)
+    for i, value in enumerate(accounts):
+        if original_hints.count(original_hints[i]) <= 1:
+            continue
+        name, _, domain = value.partition("@")
+        if len(name) >= 5:
+            # Reveal a different position rather than merely a different number.
+            hints[i] = f"{name[:2]}***{name[-2:]}@{domain}"
+    return [(f"{i + 1}. {hint}", value)
+            for i, (hint, value) in enumerate(zip(hints, accounts))
+            if hints.count(hint) == 1]
+
+
+def redact_diagnostic(line: str, serial: str | None = None, *, source: str = "") -> str:
+    """Redact account and device identifiers without mutating parser input."""
+    visible = re.sub(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+                     "[account hidden]", line)
+    transport = re.search(r"\b(?:Connected ADB device:|Device)\s+([A-Za-z0-9._:/-]{1,90})\s*$", source or line)
+    if transport:
+        visible = visible.replace(transport.group(1), "[device hidden]")
+    if serial:
+        visible = visible.replace(serial, "[device hidden]")
+    return visible
 
 
 def report_summary(report: dict | None) -> str:

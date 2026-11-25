@@ -40,7 +40,7 @@ CASES = [
     ("13-step0-adb-missing", "adb_missing", 120, 42,
      ("ADB not found", "Retry connection", "Got it")),
     ("14-account-picker", "account_picker", 120, 42,
-     ("Choose a Google account on this device", "preview.one@example.invalid", "Use selected account")),
+     ("Choose a Google account on this device", "pr***e@example.invalid", "Use selected account")),
     ("15-step1-error", "offer_error", 120, 42,
      ("Offer check failed (SIMULATED)", "Check Android connection", "Got it")),
     ("16-step1-running", "offer_running", 120, 42,

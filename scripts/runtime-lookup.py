@@ -18,7 +18,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def resolve_value(command, serial=None):
+class RuntimeUICaptureError(RuntimeError):
+    """A recognized UI capture failure, mapped to the shared exit code 23."""
+
+
+def resolve_value(command, serial=None, vmindex=None):
     with contextlib.redirect_stdout(io.StringIO()):
         if command == "adb":
             import setup_env
@@ -30,6 +34,12 @@ def resolve_value(command, serial=None):
         if command == "connect-device":
             import setup_env
             return setup_env.connect_emulator(setup_env.find_adb()) or ""
+        if command == "start-mumu":
+            import os
+            from mumu_remote import start_android
+            if sys.platform != "win32":
+                raise RuntimeError("MuMu startup is Windows-only")
+            return start_android(os.environ.get("ADB_PATH", "adb"), vmindex=vmindex)
         if command == "play-accounts-existing":
             # Startup must not install ADB or connect to emulator ports.
             from device_diagnostics import locate_adb
@@ -48,20 +58,35 @@ def resolve_value(command, serial=None):
             if command == "play-accounts":
                 # Candidate list only: not verified as current billing account.
                 return json.dumps(ultra0.available_google_accounts(), separators=(",", ":"))
-            return str(ultra0.current_play_account() or "")
+            try:
+                return str(ultra0.current_play_account() or "")
+            except ultra0.UICaptureError:
+                raise RuntimeUICaptureError("Android UI capture failed") from None
     raise ValueError("Unsupported runtime lookup command")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="ASCII-safe runtime metadata lookup")
-    parser.add_argument("command", choices=("adb", "device", "connect-device", "play-account", "play-accounts", "play-accounts-existing"))
+    parser.add_argument("command", choices=("adb", "device", "connect-device", "start-mumu", "play-account", "play-accounts", "play-accounts-existing"))
     parser.add_argument("--serial", help="ADB device serial (required for play-account)")
+    parser.add_argument("--vmindex", type=int, help="Existing MuMu instance number")
     args = parser.parse_args(argv)
     if args.command in ("play-account", "play-accounts", "play-accounts-existing") and not args.serial:
         parser.error("--serial is required for Play account lookup")
     try:
-        value = resolve_value(args.command, args.serial)
+        value = (resolve_value(args.command, args.serial, args.vmindex)
+                 if args.command == "start-mumu" else resolve_value(args.command, args.serial))
+    except RuntimeUICaptureError:
+        return 23
     except (Exception, SystemExit) as exc:
+        if args.command == "start-mumu":
+            try:
+                from mumu_remote import MuMuError
+                if isinstance(exc, MuMuError):
+                    print("MUMU_RECOVERY:" + str(exc), file=sys.stderr)
+                    return 1
+            except ImportError:
+                pass
         print("Runtime lookup failed ({0}); run python setup_env.py for ADB diagnostics.".format(
             type(exc).__name__), file=sys.stderr)
         return 1

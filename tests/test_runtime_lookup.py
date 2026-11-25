@@ -63,6 +63,25 @@ class RuntimeLookupTests(unittest.TestCase):
         self.assertEqual(json.loads(encoded), candidates)
         billing.assert_not_called()
 
+    def test_mumu_error_preserves_safe_guidance_without_result(self):
+        from mumu_remote import MuMuError
+        with patch.object(module, "resolve_value", side_effect=MuMuError("MuMu Manager not found. Install MuMu or configure MUMU_DIR.")), \
+             patch.object(sys, "stdout", new_callable=io.StringIO) as output, \
+             patch.object(sys, "stderr", new_callable=io.StringIO) as error:
+            status = module.main(["start-mumu"])
+        self.assertEqual(status, 1)
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual("MUMU_RECOVERY:MuMu Manager not found. Install MuMu or configure MUMU_DIR.\n", error.getvalue())
+
+    def test_capture_crash_has_distinct_exit_and_no_result(self):
+        import ultra0
+        with patch.object(ultra0, "find_adb", return_value="adb"), \
+             patch.object(ultra0, "pick_device"), \
+             patch.object(ultra0, "current_play_account", side_effect=ultra0.UICaptureError("Android UI capture failed")), \
+             patch.object(sys, "stdout", new_callable=io.StringIO) as stdout:
+            self.assertEqual(module.main(["play-account", "--serial", "emulator-5554"]), 23)
+            self.assertEqual(stdout.getvalue(), "")
+
     def test_account_lookup_requires_serial(self):
         with self.assertRaises(SystemExit):
             module.main(["play-account"])

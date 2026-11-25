@@ -20,6 +20,8 @@ Steps 2–5 stay locked until a fresh offer check returns offers and verifies th
 
 On Windows, running the check locates ADB or attempts to download official Android SDK Platform-Tools when missing. Installation can fail because of connectivity, permissions or security software. On macOS, install Platform-Tools through the platform's setup instructions; the Windows installer is not used.
 
+Windows users can explicitly choose **Start MuMu** in the disconnected-device popup. CLI users can run `run-all.ps1 -Step 1 -StartMumu` to start a unique existing instance or `run-all.ps1 -Step 1 -MumuInstance 2` to select instance 2. Startup is opt-in; `-NoStartMumu` rejects conflicting startup flags. No VM is created. See [Troubleshooting](TROUBLESHOOTING.md).
+
 The sidebar lists the six stages. Android Device / Google Account cards update from observed output; account identifiers are masked. Original-author and maintainer credits link to their GitHub profiles in supported terminals.
 
 **Choose account** appears next to the Account card from startup. It reads the signed-in Android account candidates when clicked. During a stage it is disabled. Choose the matching profile in Google Play and run **Check Device & Offers** to verify the selection.
@@ -30,7 +32,7 @@ Startup displays the most recently saved history even before account selection. 
 Before automatically tapping Subscribe, the toolkit requires the checkout screen to show exactly the expected email address. If the checkout account is missing, different or ambiguous, inspect the account in the Google Play checkout screen and repeat the device and offer check.
 For devices with multiple signed-in accounts, the Play Store account button can identify the active profile when its accessibility label includes an explicit email. An expanded account list with no active-profile indicator requires manual selection. A checkout-account error refers to the billing screen, and includes instructions to check Play Store and Google One before running Step 1 again.
 
-After **Check Device & Offers** reads the Android device, the **Device** card shows the Android version, SDK level, CPU ABI and ADB serial when available. Hover over the card for the full details if the terminal clips the line.
+After **Check Device & Offers** reads the Android device, the **Device** card shows the Android version, SDK level and CPU ABI when available. The ADB serial stays internal for device verification.
 
 ### Additional run options
 
@@ -102,7 +104,7 @@ The standalone `setup_env.py` and [`tools/windows/setup-environment.bat`](../too
 .\run-all.ps1 -Step 5
 ```
 
-**Unlike the TUI, an explicitly selected single checkout stage does not require a second typed PowerShell approval.** The original Python engine may automatically press Subscribe after checking the Google Play screen. Do not execute these commands unless you intend to initiate a potentially billable operation and have reviewed its terms.
+**Unlike the TUI, explicitly selected CLI Steps 2–4 do not require a second typed PowerShell approval. CLI Step 5 requires separate numbered confirmation.** The original Python engine may automatically press Subscribe after checking the Google Play screen. Do not execute these commands unless you intend to initiate a potentially billable operation and have reviewed its terms.
 
 To use the original **CLI** guided sequence:
 
@@ -120,4 +122,4 @@ Optional parameters:
 .\run-all.ps1 -AllStages -Email "account@gmail.com"
 ```
 
-Only use a `-Serial` observed through ADB. `-Email` constrains the account expected by the checks. `-Force` exists for compatibility but bypasses account-matching protections; **avoid using it**. It does not override Google Play payment restrictions or eligibility.
+Only use a `-Serial` observed through ADB. `-Email` constrains the account expected by the checks. `-Force` is retained as a legacy flag but is rejected for paid stages. A verified matching Play account is required. Direct CLI Step 5 also requires a separate confirmation.

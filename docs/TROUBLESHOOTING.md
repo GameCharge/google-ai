@@ -8,9 +8,11 @@
 | --- | --- |
 | **MuMu / ADB not detected** | Install/start MuMu separately, enable root/ADB, verify the correct connected Android instance and authorization. |
 | **Frida setup failure** | Review technical details; Frida **16.5.9** must be compatible with the host and device. |
+| **Billing module setup failed** | Check that the selected Android device is authorized and that its root access and module file permissions are valid. Setup restricts the module's write permissions and may request root authorization on Android. A symbolic link or other non-regular module path is rejected; do not change permissions of unrelated files. Rerun the environment check. Before retrying a paid step, review Google Play subscriptions and payments. |
 | **Linux: ADB missing** | Install Platform-Tools; use `PATH` or `ADB_PATH`, then run `"${ADB_PATH:-adb}" devices`. |
 | **Linux: USB unauthorized / permission denied** | Check the USB cable, unlock the phone, approve debugging and inspect Linux USB/udev rules rather than Windows MuMu settings. |
 | **Linux: Android 16+** | SDK 36+ is blocked for device setup with pinned Frida 16.5.9. USB-only diagnostics remain available. |
+| **Android UI capture failed / Segmentation fault** | Android UI Automator could not read the screen. The toolkit retries a crash or timeout once with a fresh capture, then stops if recovery fails. Close MuMu and reopen it, or restart the selected Android device; wait for boot, unlock it and open Google Play before running **Check Device & Offers** again from Step 1. No automatic paid-stage retry is performed. If checkout was already open, check Google Play subscriptions and payment history before retrying. |
 | **No offers / `offer_query_failed`** | Open Google One and Google Play on the target Android instance and run Step 1 again. |
 | **Google One or Google Play Store could not be opened** | The read-only offer check tries reopening the app once. If that fails in MuMu, close and reopen MuMu, wait for Android to finish booting, then run **Check Device & Offers** again from Step 1. On other devices, restart Android before running the check again. |
 | **MuMu is open but ADB has no device** | When a Windows stage starts with no online ADB device, the toolkit tries the existing local emulator connection routine, then reads the ADB list again. If it still fails, check MuMu ADB debugging and run **Check Device & Offers** again. |
@@ -24,6 +26,8 @@
 | **`already_subscribed` / `ineligible`** | Stop; do not retry other checkout stages based on unverified extension claims. |
 | **Payment/security error (e.g. OR-REH-04)** | Follow Google Account/Payments security instructions. Do not repeatedly retry. |
 | **Unicode output error** | Update the repository; the maintained Windows launcher configures Python UTF-8 output for piped status symbols. |
+
+On Windows, the disconnected-device popup also offers **Start MuMu**. It launches an existing unique instance, waits for the reported ADB port, and never creates a VM or signs into Google. If multiple instances exist, open the intended one manually, or use `-MumuInstance` in the CLI. Set `MUMU_DIR` for a custom installation. Retry never starts a VM. Startup failures restore the popup controls; use Retry or open the intended instance manually.
 
 The disconnected-device popup includes **Retry connection**. While it checks, the button displays **Retrying…** and elapsed seconds. A successful connection closes the popup. If it fails, the popup offers MuMu restart guidance and another retry.
 

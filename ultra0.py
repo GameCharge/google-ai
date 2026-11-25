@@ -411,14 +411,44 @@ def ensure_vending(*, retry_startup: bool = False) -> bool:
 
 
 def ensure_module_apk():
-    if sh("shell", f"ls {MODULE_REMOTE} 2>/dev/null"):
-        ok("Billing module is already installed")
-        return
-    note("Pushing billing module to Android (one-time setup)...")
-    tmp = Path(tempfile.gettempdir()) / "module_521.apk"
-    tmp.write_bytes(base64.b64decode(MODULE_B64))
-    sh("push", str(tmp), MODULE_REMOTE, timeout=120)
-    ok("Billing module installed")
+    """Install the module and normalize permissions even on existing copies."""
+    try:
+        path = shlex.quote(MODULE_REMOTE)
+        # Reject links (including dangling ones) and non-regular files before
+        # any push or permission change. Do not remove an unexpected path.
+        state = sh("shell",
+                   f"if [ -L {path} ]; then echo invalid; "
+                   f"elif [ -f {path} ]; then echo present; "
+                   f"elif [ -e {path} ]; then echo invalid; "
+                   "else echo missing; fi", timeout=15, check=True).strip()
+        if state not in ("present", "missing"):
+            raise RuntimeError("Unexpected billing module file type")
+        existing = state == "present"
+        if not existing:
+            note("Pushing billing module to Android (one-time setup)...")
+            with tempfile.TemporaryDirectory(prefix="eplus-module-") as directory:
+                tmp = Path(directory) / "module_521.apk"
+                tmp.write_bytes(base64.b64decode(MODULE_B64))
+                sh("push", str(tmp), MODULE_REMOTE, timeout=120, check=True)
+        # The app loading the module must not have write access to it.
+        # Repeat the file-type guard in both shell contexts, including after
+        # a fresh push and before the privileged fallback.
+        command = f"test ! -L {path} && test -f {path} && chmod 644 {path} && echo ok"
+        try:
+            changed = sh("shell", command, timeout=15, check=True).strip() == "ok"
+        except RuntimeError:
+            changed = False
+        if not changed:
+            # Some authorized rooted devices use a non-root ADB shell.
+            changed = sh("shell", "su -c " + shlex.quote(command),
+                         timeout=15, check=True).strip() == "ok"
+        if not changed:
+            raise RuntimeError("Permission change not confirmed")
+    except (OSError, RuntimeError, subprocess.TimeoutExpired):
+        print("EPLUS_ISSUE:billing_module_setup_failed", flush=True)
+        warn("Billing module setup failed. Check authorized Android access and file permissions.")
+        raise RuntimeError("Billing module setup failed") from None
+    ok("Billing module is already installed" if existing else "Billing module installed")
 
 
 def ensure_network():
@@ -434,45 +464,47 @@ def ensure_network():
 
 
 # ---------- UI ----------
+class UICaptureError(RuntimeError):
+    """Android UI capture failed; do not infer account or checkout state."""
+
+
 def ui_xml() -> str:
-    path = f"/sdcard/eplus-ui-{uuid4().hex}.xml"
-    base = [ADB] + (["-s", SERIAL] if SERIAL else [])
-
-    try:
-        subprocess.run(
-            base + ["shell", "uiautomator", "dump", path],
-            capture_output=True,
-            timeout=30
+    # A failed dump can leave old data. Use a unique path for every attempt,
+    # and read it only after the dump exits successfully.
+    recovering = False
+    for attempt in range(2):
+        path = f"/sdcard/eplus-ui-{uuid4().hex}.xml"
+        command = (
+            f"trap 'rm -f {path}' EXIT; "
+            f"uiautomator dump {path} >/dev/null && cat {path}"
         )
-
-        p = subprocess.run(
-            base + ["shell", "cat", path],
-            capture_output=True,
-            timeout=30
-        )
-
-        xml = p.stdout.decode("utf-8", "ignore").strip()
-
+        try:
+            xml = sh("shell", command, timeout=20, check=True)
+        except (RuntimeError, subprocess.TimeoutExpired) as exc:
+            diagnostic = " ".join(str(exc).split())
+            transient = (isinstance(exc, subprocess.TimeoutExpired) or
+                         bool(re.search(r"segmentation fault|sigsegv", diagnostic, re.I)))
+            if transient or recovering:
+                if attempt == 0:
+                    recovering = True
+                    time.sleep(1)
+                    continue
+                raise UICaptureError("Android UI capture failed") from None
+            # Preserve existing handling for other dump failures.
+            # Keep machine-readable stdout clean; never log UI XML.
+            if "<" in diagnostic:
+                diagnostic = "XML diagnostic omitted"
+            print("Android UI capture failed: " + (diagnostic or "no stderr diagnostic"),
+                  file=sys.stderr, flush=True)
+            return ""
         if xml.endswith("</hierarchy>"):
             return xml
-
-        print(f"UI XML read failed: code={p.returncode}, "
-              f"stderr={p.stderr.decode('utf-8', 'ignore')[:300]}",
-              file=sys.stderr, flush=True)
+        if recovering:
+            raise UICaptureError("Android UI capture failed") from None
         return ""
+    raise UICaptureError("Android UI capture failed")
 
-    except Exception as exc:
-        print(f"UI capture failed: {type(exc).__name__}: {exc}",
-              file=sys.stderr, flush=True)
-        return ""
 
-    finally:
-        subprocess.run(
-            base + ["shell", "rm", "-f", path],
-            capture_output=True,
-            timeout=10
-        )
-        
 def nodes(xml: str):
     for m in re.finditer(r"<node[^>]*>", xml):
         s = m.group(0)
@@ -693,13 +725,12 @@ def current_play_account() -> str:
         # Play Store exposes the active profile on its account button in
         # some versions. Other signed-in accounts in the expanded menu
         # must not override that explicit identity.
-        if "Signed in as " in n["desc"]:
+        if re.match(r"^(?:Google Account|T\u00e0i kho\u1ea3n Google|Google \u5e10\u53f7|Google \u8d26\u53f7)\s*[:\uff1a]", n["desc"], re.I):
             active = {value.lower() for value in re.findall(
                 r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", n["desc"])}
             if len(active) == 1:
                 return next(iter(active))
         if ("\u8d26\u53f7\u548c\u8bbe\u7f6e" in n["desc"] or "Account and settings" in n["desc"]
-                or "Аккаунт и настройки" in n["desc"]
                 or "T\u00e0i kho\u1ea3n v\u00e0 ch\u1ebf \u0111\u1ed9 c\u00e0i \u0111\u1eb7t" in n["desc"]):
             tap(n["x"], n["y"])
             time.sleep(3)
@@ -1187,6 +1218,8 @@ def process(email, password="", totp_secret="", add=True, card=None, plan="auto"
             if not add_account(email, password, totp_secret):
                 rec["status"] = "add_account_failed"
                 return rec
+        except UICaptureError:
+            raise
         except Exception as e:
             warn(f"Could not add Google account: {e}")
             rec["status"] = "add_account_error"
@@ -1196,6 +1229,8 @@ def process(email, password="", totp_secret="", add=True, card=None, plan="auto"
             if not add_card(card):
                 rec["status"] = "payment_method_not_confirmed"
                 return rec
+        except UICaptureError:
+            raise
         except Exception as e:
             warn(f"Could not add payment card: {type(e).__name__}")
             rec["status"] = "payment_method_not_confirmed"
@@ -1419,6 +1454,14 @@ def main():
                 rec = process(email, pw, sec, add=(not a.no_add and not a.list), card=card, plan=a.plan,
                               no_switch=a.no_switch, list_only=a.list, stack=a.stack, old_token=a.old_token,
                               stack_mode=a.mode, activity_method=a.activity_method)
+        except UICaptureError:
+            # Stop the whole invocation, including multi-account runs. No
+            # automatic checkout retry or account substitution is permitted.
+            rec = {"email": email, "status": "ui_capture_failed"}
+            (REPORT_DIR / report_filename(email)).write_text(
+                json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+            warn("Android UI capture failed. Restart the Android device, then repeat Step 1. Check Google Play payment history before retrying any paid step.")
+            return 23
         except Exception as e:
             warn(f"{type(e).__name__}: {str(e)[:320]}")
             rec = {"email": email, "status": "exception", "error": str(e)[:320],
